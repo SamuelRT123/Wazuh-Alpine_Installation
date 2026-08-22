@@ -9,7 +9,7 @@ Ingeniería de Sistemas y Computación | Ciberseguridad
 
 Esta guía documenta cómo compilar, instalar y registrar el agente de Wazuh 4.12.0 desde código fuente sobre Alpine Linux 3.21.5.
 
-Como habrán notado, el servidor web implementado por la organización fue hecho con Alpine Linux 3.21.5, una distribución que usa `musl` como implementación de la librería estándar de C. Esto hace que Wazuh no dé soporte oficial a Alpine ni a `musl`. El propio equipo de Wazuh tiene un pedido abierto de la comunidad desde 2020 solicitando este soporte, sin resolverlo de forma oficial hasta la fecha. Todo lo que sigue en esta guía es el resultado de una sesión de depuración real e iterativa, encontrando y corrigiendo un error de compilación a la vez; no es una ruta oficial distribuida por Wazuh.
+El servidor web implementado por la organización fue hecho con Alpine Linux 3.21.5, una distribución que usa `musl` como implementación de la librería estándar de C. Esto hace que Wazuh no dé soporte oficial a Alpine ni a `musl`. El propio equipo de Wazuh tiene un pedido abierto de la comunidad desde 2020 solicitando este soporte, sin resolverlo de forma oficial hasta la fecha. Todo lo que sigue en esta guía es el resultado de una sesión de depuración real e iterativa, encontrando y corrigiendo un error de compilación a la vez; no es una ruta oficial distribuida por Wazuh.
 
 ---
 
@@ -36,7 +36,7 @@ Todo programa en C necesita una librería estándar de C (libc): es la capa que 
 * **glibc (GNU C Library):** es la libc que usan la gran mayoría de distribuciones Linux "grandes": Ubuntu, Debian, CentOS y Fedora. Es la más completa, pero también la más pesada.
 * **musl:** es una libc alternativa, escrita para ser pequeña, simple y rápida. Alpine Linux la eligió como su libc por defecto precisamente por eso; es una de las razones por las que las imágenes de Alpine pesan tan poco comparadas con otras distribuciones.
 
-### ¿Qué es make y por qué compilamos con él?
+### ¿Qué es make y por qué se compila con él?
 `make` es una herramienta que automatiza la compilación de proyectos grandes con muchos archivos fuente. En vez de compilar archivo por archivo a mano, un archivo llamado Makefile describe las reglas ("para construir X, primero hay que tener Y y Z, y correr este comando") y `make` se encarga de ejecutar todo en el orden correcto.
 
 Wazuh usa un Makefile gigante que compila cientos de archivos fuente propios más docenas de librerías de terceros (`src/external`). Por ejemplo:
@@ -59,19 +59,19 @@ Esto importa para la guía porque CMake **no hereda automáticamente** las varia
 
 ## 4 REQUISITOS PREVIOS
 
-Antes de empezar, confirmen que tienen lo siguiente — varios de los pasos fallan de forma confusa si falta algo de esta lista:
+Antes de empezar, debe confirmarse lo siguiente — varios de los pasos fallan de forma confusa si falta algo de esta lista:
 
-* **Acceso root** en el contenedor o máquina Alpine donde se va a compilar el agente. Todos los comandos de esta guía asumen que corren como `root`.
-* **Arquitectura x86_64.** El Paso 5.2 (`libucontext`) compila explícitamente con `ARCH=x86_64`. Si su servidor Alpine corre en `aarch64` (por ejemplo, un Mac con Apple Silicon o una instancia ARM en la nube), deben cambiar ese valor por `ARCH=arm64` antes de compilar, o el agente no arrancará.
+* **Acceso root** en el contenedor o máquina Alpine donde se va a compilar el agente. Todos los comandos de esta guía asumen que se ejecutan como `root`.
+* **Arquitectura x86_64.** El Paso 5.2 (`libucontext`) compila explícitamente con `ARCH=x86_64`. Si el servidor Alpine corre en `aarch64` (por ejemplo, un Mac con Apple Silicon o una instancia ARM en la nube), ese valor debe cambiarse por `ARCH=arm64` antes de compilar, o el agente no arrancará.
 * **Conectividad de salida a internet** desde el contenedor, para `git clone`, `apk add` y `make deps` (que descarga las dependencias de `src/external`).
-* **Conectividad de red hacia el Wazuh manager** en los puertos **1515/TCP** (registro, Paso 9) y **1514/TCP** (conexión persistente, Paso 10) — vale la pena verificarla antes de empezar a compilar, no solo al final.
+* **Conectividad de red hacia el Wazuh manager** en los puertos **1515/TCP** (registro, Paso 9) y **1514/TCP** (conexión persistente, Paso 10) — conviene verificarla antes de empezar a compilar, no solo al final.
 * **Tiempo:** la compilación completa (Pasos 3 a 7) puede tomar entre 20 y 40 minutos dependiendo de los recursos del contenedor, en su mayoría por OpenSSL y los sub-builds de CMake.
 
 ---
 
-# Solución 
+## 5 SOLUCIÓN
 
-## Paso 1 — Paquetes de desarrollo en Alpine
+### Paso 1 — Paquetes de desarrollo en Alpine
 
 ```bash
 apk update && apk add --no-cache \
@@ -86,7 +86,7 @@ programas BPF con Clang y enlazar contra `libbpf`.
 
 ---
 
-## Paso 2 — Clonar Wazuh 4.12.0 y crear cabeceras de compatibilidad musl/BPF
+### Paso 2 — Clonar Wazuh 4.12.0 y crear cabeceras de compatibilidad musl/BPF
 
 ```bash
 rm -rf /root/wazuh
@@ -226,37 +226,36 @@ EOF
 fi
 ```
 
-Para lograr compilar con éxito el agente de **Wazuh 4.12.0** en **Alpine Linux**, es necesario crear cabeceras de compatibilidad personalizadas. 
-Alpine utiliza **musl libc** en lugar de **glibc** y cuenta con un conjunto reducido de cabeceras del espacio de usuario (*userspace*) del kernel de Linux. 
-A continuación se detalla el propósito técnico de cada una de las cabeceras e inyecciones de código implementadas:
+Para lograr compilar con éxito el agente de **Wazuh 4.12.0** en **Alpine Linux**, es necesario crear cabeceras de compatibilidad personalizadas. Alpine utiliza **musl libc** en lugar de **glibc** y cuenta con un conjunto reducido de cabeceras del espacio de usuario (*userspace*) del kernel de Linux. A continuación se detalla el propósito técnico de cada una de las cabeceras e inyecciones de código creadas arriba.
+
+#### 1. `/usr/include/linux/compiler.h`
+
+- **Propósito:** proveer macros de atributos del compilador GCC/Clang y definiciones eBPF base.
+- **Explicación:** el código de Wazuh (especialmente los módulos de eBPF) utiliza anotaciones específicas del kernel de Linux como `__user`, `__packed`, `__always_inline` o `fallthrough`. En sistemas GNU tradicionales estas provienen de las cabeceras internas del kernel, pero en musl no están presentes por defecto. Esta cabecera evita errores de sintaxis definiendo estos atributos para el compilador.
+
+#### 2. `/usr/include/linux/kernel.h`
+
+- **Propósito:** ofrecer macros utilitarias estándar para manipulación de datos y memoria.
+- **Explicación:** define utilidades fundamentales a nivel de sistema que el código de Wazuh espera encontrar en las cabeceras del kernel, tales como `ARRAY_SIZE` (utilizada para calcular de manera segura la cantidad de elementos en un arreglo) y `roundup` (empleada en la alineación de bloques de memoria).
+
+#### 3. `/usr/include/linux/err.h`
+
+- **Propósito:** recrear la API de gestión de errores basada en punteros del kernel de Linux.
+- **Explicación:** en el desarrollo de Linux es habitual codificar valores de error (`errno`) directamente dentro de direcciones de puntero devueltas por funciones. Funciones inline como `IS_ERR()`, `PTR_ERR()` y `ERR_PTR()` permiten a Wazuh inspeccionar y manipular estos punteros de error sin depender de las librerías del kernel en espacio de usuario.
+
+#### 4. `/usr/include/linux/bpf_insn.h` y `/usr/include/bpf/bpf_insn.h`
+
+- **Propósito:** proporcionar las estructuras e instrucciones base del ensamblador eBPF.
+- **Explicación:** suministra las definiciones de registros e instrucciones esenciales de eBPF (como `BPF_MOV64_IMM` y `BPF_EXIT_INSN`). Al duplicar este archivo en ambas rutas (`/linux/` y `/bpf/`), se garantiza la compatibilidad tanto si el código fuente de Wazuh incluye el archivo mediante `<linux/bpf_insn.h>` como si lo hace mediante `<bpf/bpf_insn.h>`.
+
+#### 5. Parche a `/usr/include/linux/bpf.h` (`BPF_MAP_TYPE_ARENA`)
+
+- **Propósito:** garantizar la definición del tipo de mapa eBPF `BPF_MAP_TYPE_ARENA`.
+- **Explicación:** `BPF_MAP_TYPE_ARENA` es una constante agregada en versiones recientes del kernel Linux para asignación de memoria compartida en eBPF. Si la versión de las cabeceras del kernel instaladas en Alpine es anterior o no la incluye, esta inyección asegura que el código de Wazuh encuentre la constante (con valor `31`) y compile sin arrojar errores de símbolo no declarado.
+
 ---
 
-### 1. `/usr/include/linux/compiler.h`
-**Propósito:** Proveer macros de atributos del compilador GCC/Clang y definiciones eBPF base.  
-**Explicación:** El código de Wazuh (especialmente los módulos de eBPF) utiliza anotaciones específicas del kernel de Linux como `__user`, `__packed`, `__always_inline` o `fallthrough`. En sistemas GNU tradicionales estas provienen de las cabeceras internas del kernel, pero en musl no están presentes por defecto. Esta cabecera evita errores de sintaxis definiendo estos atributos para el compilador.
-
-
-### 2. `/usr/include/linux/kernel.h`
-**Propósito:** Ofrecer macros utilitarias estándar para manipulación de datos y memoria.  
-**Explicación:** Define utilidades fundamentales a nivel de sistema que el código de Wazuh espera encontrar en las cabeceras del kernel, tales como `ARRAY_SIZE` (utilizada para calcular de manera segura la cantidad de elementos en un arreglo) y `roundup` (empleada en la alineación de bloques de memoria).
-
-
-### 3. `/usr/include/linux/err.h`
-**Propósito:** Recrear la API de gestión de errores basada en punteros del kernel de Linux.  
-**Explicación:** En el desarrollo de Linux es habitual codificar valores de error (`errno`) directamente dentro de direcciones de puntero devueltas por funciones. Funciones inline como `IS_ERR()`, `PTR_ERR()` y `ERR_PTR()` permiten a Wazuh inspeccionar y manipular estos punteros de error sin depender de las librerías del kernel en espacio de usuario.
-
-
-### 4. `/usr/include/linux/bpf_insn.h` y `/usr/include/bpf/bpf_insn.h`
-**Propósito:** Proporcionar las estructuras e instrucciones base del ensamblador eBPF.  
-**Explicación:** Suministra las definiciones de registros e instrucciones esenciales de eBPF (como `BPF_MOV64_IMM` y `BPF_EXIT_INSN`). Al duplicar este archivo en ambas rutas (`/linux/` y `/bpf/`), se garantiza la compatibilidad tanto si el código fuente de Wazuh incluye el archivo mediante `<linux/bpf_insn.h>` como si lo hace mediante `<bpf/bpf_insn.h>`.
-
-### 5. Parche a `/usr/include/linux/bpf.h` (`BPF_MAP_TYPE_ARENA`)
-**Propósito:** Garantizar la definición del tipo de mapa eBPF `BPF_MAP_TYPE_ARENA`.  
-**Explicación:** `BPF_MAP_TYPE_ARENA` es una constante agregada en versiones recientes del kernel Linux para asignación de memoria compartida en eBPF. Si la versión de las cabeceras del kernel instaladas en Alpine es anterior o no la incluye, esta inyección asegura que el código de Wazuh encuentre la constante (con valor `31`) y compile sin arrojar errores de símbolo no declarado.
-
----
-
-## Paso 3 — Dependencias externas oficiales (reemplaza submódulos git, que no funcionan aquí)
+### Paso 3 — Dependencias externas oficiales (reemplaza submódulos git, que no funcionan aquí)
 
 ```bash
 cd /root/wazuh/src
@@ -266,7 +265,7 @@ make deps TARGET=agent EXTERNAL_SRC_ONLY=yes
 `EXTERNAL_SRC_ONLY=yes` pide código fuente (para compilarlo contra musl) en
 vez de binarios precompilados (que asumen glibc).
 
-### 3.1 — Excepción: `libbpf-bootstrap` necesita el paquete PRECOMPILADO
+#### 3.1 — Excepción: `libbpf-bootstrap` necesita el paquete PRECOMPILADO
 
 El programa eBPF del módulo FIM/whodata (`modern.bpf.c`) usa builtins CO-RE de
 Clang (`__builtin_preserve_access_index`) que Wazuh compila en un pipeline de
@@ -288,13 +287,13 @@ el binario ya compilado por Wazuh).
 
 ---
 
-## Paso 4 — Parche de OpenSSL para musl (bug de `strerror_r`)
+### Paso 4 — Parche de OpenSSL para musl (bug de `strerror_r`)
 
 **El problema:** `crypto/o_str.c` de OpenSSL decide qué variante de
 `strerror_r` usar según `#elif defined(_GNU_SOURCE)`. En glibc, definir
 `_GNU_SOURCE` cambia `strerror_r` para que devuelva `char *`. **musl nunca
 implementa esa variante** — su `strerror_r` siempre devuelve `int`, sin
-importar qué macros de feature test estén definidas. Como compilamos con
+importar qué macros de feature test estén definidas. Dado que la compilación se realiza con
 `-D_GNU_SOURCE` globalmente, OpenSSL entra por la rama equivocada y falla:
 
 ```
@@ -312,7 +311,7 @@ sed -i 's/#elif defined(_GNU_SOURCE)/#elif defined(_GNU_SOURCE) \&\& defined(__G
 
 ---
 
-## Paso 5 — Compatibilidad de símbolos glibc faltantes en musl
+### Paso 5 — Compatibilidad de símbolos glibc faltantes en musl
 
 Wazuh (concretamente `sysinfo`/`data_provider` y `libwazuhext`) llama a
 varias funciones que son extensiones exclusivas de glibc y que **musl nunca
@@ -323,7 +322,7 @@ dispositivo `gnu_dev_*`, toda la familia LFS64 (`open64`, `stat64`,
 (`getcontext`/`setcontext`/`makecontext`, que musl omite a propósito por
 decisión de diseño, ya retirado de POSIX).
 
-### 5.1 — Compilar `libexecinfo` (para `backtrace`/`backtrace_symbols`)
+#### 5.1 — Compilar `libexecinfo` (para `backtrace`/`backtrace_symbols`)
 
 Alpine eliminó el paquete `libexecinfo-dev` de sus repositorios a partir de
 la versión 3.17 — hay que compilarlo desde el fork mantenido para musl:
@@ -338,7 +337,7 @@ cp libexecinfo.so.1 /usr/lib/
 ln -sf /usr/lib/libexecinfo.so.1 /usr/lib/libexecinfo.so
 ```
 
-### 5.2 — Compilar `libucontext` (para `getcontext`/`setcontext`/`makecontext`)
+#### 5.2 — Compilar `libucontext` (para `getcontext`/`setcontext`/`makecontext`)
 
 ```bash
 git clone https://github.com/kaniini/libucontext.git /root/libucontext
@@ -347,9 +346,9 @@ make ARCH=x86_64
 make ARCH=x86_64 DESTDIR=/usr install
 ```
 
-> **Arquitectura:** `ARCH=x86_64` está fijo en los dos comandos. Si su
-> servidor Alpine corre en `aarch64` (ver Requisitos previos), cámbienlo por
-> `ARCH=arm64` en ambos antes de compilar.
+> **Arquitectura:** `ARCH=x86_64` está fijo en los dos comandos. Si el
+> servidor Alpine corre en `aarch64` (ver Requisitos previos), debe
+> cambiarse por `ARCH=arm64` en ambos antes de compilar.
 
 > **Ojo:** el `Makefile` de `libucontext` ya trae `/usr` como prefijo interno
 > fijo. Si con `DESTDIR=/usr` los archivos terminan en `/usr/usr/lib/` y
@@ -366,7 +365,7 @@ la práctica, esos alias débiles no siempre se resuelven de forma confiable
 cuando quedan enterrados dentro de un enlace `--whole-archive`, así que el
 shim del siguiente paso los redirige explícitamente.
 
-### 5.3 — El shim de compatibilidad completo (`musl_compat.c`)
+#### 5.3 — El shim de compatibilidad completo (`musl_compat.c`)
 
 Esta es la versión final, que ya incluye las redirecciones explícitas hacia
 `libucontext` (evita depender de sus símbolos débiles):
@@ -470,7 +469,7 @@ gcc -c -fPIC /root/wazuh/src/external/musl_compat/musl_compat.c \
 
 ---
 
-## Paso 6 — Inyectar el shim en el Makefile de Wazuh
+### Paso 6 — Inyectar el shim en el Makefile de Wazuh
 
 **Por qué no basta con `LDFLAGS`:** la receta de enlace de `libwazuhext.so`
 en el `Makefile` de Wazuh está escrita a mano (no es una regla implícita de
@@ -500,7 +499,7 @@ OSSEC_LIBS += /root/wazuh/src/external/musl_compat/musl_compat.o /usr/lib/libuco
 EOF
 ```
 
-### Reconstruir `libwazuhext.so` y verificar
+#### Reconstruir `libwazuhext.so` y verificar
 
 ```bash
 rm -f libwazuhext.so
@@ -512,7 +511,7 @@ nm -D libwazuhext.so | grep -E 'getcontext|setcontext|makecontext'
 
 ---
 
-## Paso 7 — Compilación completa del agente (con `CMAKE_OPTS` para los sub-builds de CMake)
+### Paso 7 — Compilación completa del agente (con `CMAKE_OPTS` para los sub-builds de CMake)
 
 `sysinfo`/`data_provider` y `syscollector` son sub-proyectos de **CMake**
 anidados dentro del Makefile principal — CMake no lee `LDFLAGS` del entorno,
@@ -538,21 +537,21 @@ Una vez en este punto, siempre que se quiera volver a compilar el agente se redu
 
 ---
 
-## Paso 8 — Instalar el agente compilado
+### Paso 8 — Instalar el agente compilado
 
 ```bash
 cd /root/wazuh
 ./install.sh
 ```
 
-Es un script interactivo: elijan **agent** (no manager) cuando pregunte el
-tipo de instalación, y acepten el directorio destino por defecto
-(`/var/ossec`). Como todo ya se compiló en `src/`, este paso solo copia los
-binarios a su ubicación final — no vuelve a compilar nada.
+Es un script interactivo: debe elegirse **agent** (no manager) cuando
+pregunte el tipo de instalación, y aceptarse el directorio destino por
+defecto (`/var/ossec`). Como todo ya se compiló en `src/`, este paso solo
+copia los binarios a su ubicación final — no vuelve a compilar nada.
 
 ---
 
-## Paso 9 — Registrar el agente
+### Paso 9 — Registrar el agente
 
 Registrar el agente contra el manager (genera `client.keys`):
 
@@ -565,7 +564,7 @@ Registrar el agente contra el manager (genera `client.keys`):
 > es el **1514**. Son dos puertos distintos — que uno responda no garantiza
 > que el otro también esté abierto en el firewall. Si `agent-auth` falla
 > con `Unable to connect to enrollment service`, antes de sospechar de la
-> IP, prueben conectividad directa al puerto:
+> IP conviene probar conectividad directa al puerto:
 > ```bash
 > apk add --no-cache netcat-openbsd
 > nc -zv IP_DEL_MANAGER 1515
@@ -577,7 +576,7 @@ Registrar el agente contra el manager (genera `client.keys`):
 
 ---
 
-## Paso 10 — Arrancar el agente (parche de `wazuh-control` para BusyBox)
+### Paso 10 — Arrancar el agente (parche de `wazuh-control` para BusyBox)
 
 **El problema:** `wazuh-control` verifica si un proceso sigue vivo con
 `ps -p $PID`. BusyBox (el `ps` de Alpine) no soporta ese flag de la misma
@@ -608,7 +607,7 @@ rm -f /var/ossec/var/run/*.pid
 /var/ossec/bin/wazuh-control start
 ```
 
-Deberían ver los 5-6 demonios (`wazuh-execd`, `wazuh-agentd`,
+Se deben ver los 5-6 demonios (`wazuh-execd`, `wazuh-agentd`,
 `wazuh-logcollector`, `wazuh-syscheckd`, `wazuh-modulesd`, etc.) arrancar
 uno tras otro sin el mensaje `Process not used by Wazuh, removing`.
 Confirmar:
@@ -623,7 +622,7 @@ Y por último, confirmar en el **manager** que el agente ya no aparece como
 
 ---
 
-## Casos de error
+## 6 CASOS DE ERROR
 
 ### Si el Paso 3.1 falla — Cabeceras faltantes de `bpftool` bootstrap
 
@@ -666,20 +665,24 @@ Editar `/var/ossec/etc/ossec.conf`, dentro de la sección `<client>`:
 
 ### Fallo al obtener la llave del Wazuh manager
 
-Si al ejecutar el Paso 9 el registro falla, revisen en este orden:
+Si al ejecutar el Paso 9 el registro falla, conviene revisar en este orden:
 
-1. **Conectividad.** Confirmen que el contenedor del agente alcanza al manager en el puerto **1515/TCP** (ver el bloque de `nc -zv` más arriba). Sin esto, ninguna de las opciones siguientes va a funcionar.
-2. **Nombre de agente duplicado.** Si hubo intentos fallidos previos, puede que ya exista un agente registrado con ese nombre. Desde el dashboard, en **Agents management → Summary**, busquen el nombre y elimínenlo antes de reintentar, o regístrense con un nombre distinto agregando `-A <nombre>` al comando del Paso 9:
+1. **Conectividad.** Debe confirmarse que el contenedor del agente alcanza al manager en el puerto **1515/TCP** (ver el bloque de `nc -zv` más arriba). Sin esto, ninguna de las opciones siguientes va a funcionar.
+2. **Nombre de agente duplicado.** Si hubo intentos fallidos previos, puede que ya exista un agente registrado con ese nombre. Desde el dashboard, en **Agents management → Summary**, puede buscarse el nombre y eliminarlo antes de reintentar, o registrarse con un nombre distinto agregando `-A <nombre>` al comando del Paso 9:
    ```bash
    /var/ossec/bin/agent-auth -m IP_DEL_MANAGER -A nombre-alternativo
    ```
-3. **Obtener la llave manualmente vía la API de Wazuh**, si `agent-auth` sigue fallando pero el manager sí responde. Esto es útil porque separa el problema de red del problema de generación de la llave: si la API logra darles una llave, el problema estaba en `wazuh-authd`/puerto 1515, no en el manager en general.
+3. **Obtener la llave manualmente vía la API de Wazuh**, si `agent-auth` sigue fallando pero el manager sí responde. Esto es útil porque separa el problema de red del problema de generación de la llave: si la API logra entregar una llave, el problema estaba en `wazuh-authd`/puerto 1515, no en el manager en general.
 
-   Desde el dashboard: menú lateral → **Server management → Dev Tools**, o desde línea de comandos con `curl`. El flujo es el mismo en ambos casos — autenticarse contra la API (puerto **55000/TCP** por defecto) para obtener un token, y usar ese token para pedir la llave del agente:
+   Desde el dashboard: menú lateral → **Server management → Dev Tools**, que lleva a la siguiente interfaz para interactuar con la API de Wazuh directamente:
+
+   <img width="1919" height="704" alt="Interfaz de Dev Tools en el dashboard de Wazuh" src="https://github.com/user-attachments/assets/396121f1-f3e7-428e-bf2a-388248b8b37a" />
+
+   El mismo flujo puede hacerse desde línea de comandos con `curl` — autenticarse contra la API (puerto **55000/TCP** por defecto) para obtener un token, y usar ese token para pedir la llave del agente:
 
    ```bash
    # 1. Autenticarse y obtener un token (usuario/clave por defecto de la API: wazuh/wazuh,
-   #    cámbienlo si el manager ya tiene credenciales distintas configuradas)
+   #    que debe cambiarse si el manager ya tiene credenciales distintas configuradas)
    TOKEN=$(curl -u wazuh:wazuh -k -X POST \
      "https://IP_DEL_MANAGER:55000/security/user/authenticate?raw=true")
 
@@ -698,11 +701,11 @@ Si al ejecutar el Paso 9 el registro falla, revisen en este orden:
    ```bash
    /var/ossec/bin/manage_agents -i <LLAVE_OBTENIDA>
    ```
-   Este método reemplaza a `agent-auth` para ese agente puntual; luego se sigue con el Paso 10 (arrancar el agente) normalmente.
+   Este método reemplaza a `agent-auth` para ese agente puntual; luego se continúa con el Paso 10 (arrancar el agente) normalmente.
 
 ---
 
-## Estado de esta guía
+## 7 ESTADO DE ESTA GUÍA
 
 **Verificado en vivo, de punta a punta, desde `apk update` hasta agente
 `active` en el manager**, sobre Alpine Linux 3.21.5 y Wazuh 4.12.0. Todos
