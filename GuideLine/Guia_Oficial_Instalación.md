@@ -4,48 +4,6 @@
 **Universidad de los Andes - Colombia**  
 Ingeniería de Sistemas y Computación | Ciberseguridad
 
----
-
-## 1 INTRODUCCIÓN
-
-Esta guía documenta cómo compilar, instalar y registrar el agente de Wazuh 4.12.0 desde código fuente sobre Alpine Linux 3.21.5.
-
-Como habrán notado, el servidor web implementado por la organización fue hecho con Alpine Linux 3.21.5, una distribución que usa `musl` como implementación de la librería estándar de C. Esto hace que Wazuh no dé soporte oficial a Alpine ni a `musl`. El propio equipo de Wazuh tiene un pedido abierto de la comunidad desde 2020 solicitando este soporte, sin resolverlo de forma oficial hasta la fecha. Todo lo que sigue en esta guía es el resultado de una sesión de depuración real e iterativa, encontrando y corrigiendo un error de compilación a la vez; no es una ruta oficial distribuida por Wazuh.
-
----
-
-## 2 EL PROBLEMA
-
-`musl` y `glibc` son ambas implementaciones de la librería estándar de C, pero no son binariamente compatibles y difieren en varios puntos clave. Wazuh fue escrito asumiendo `glibc`, por lo que da por sentados los siguientes aspectos:
-
-* **Extensiones GNU que musl no implementa:** funciones como `random_r`, `gnu_dev_major`, `mkstemp64`, `backtrace`, o toda la familia "LFS64" (`open64`, `stat64`, etc.) existen en `glibc` pero simplemente no existen en `musl`.
-* **Funciones retiradas por decisión de diseño:** `getcontext`, `setcontext` y `makecontext` (manejo de contexto de ejecución) fueron eliminadas de POSIX y `musl` decidió no implementarlas nunca.
-* **Comportamiento distinto bajo las mismas macros:** el mismo código fuente, compilado con las mismas flags, se comporta distinto en cada sistema; por ejemplo, `strerror_r`.
-* **Herramientas de sistema distintas:** Alpine usa BusyBox en vez de las utilidades GNU/Coreutils. Por ejemplo, su `ps` no soporta el flag `-p` de la misma forma, lo cual rompe scripts de Wazuh que dan por sentado un `ps` estilo GNU.
-
-A esto se suma que el agente de Wazuh 4.12, usado por la administración en su manager y dashboard, incorpora monitoreo basado en eBPF (módulo FIM/whodata), que trae sus propias dependencias específicas (Clang, libbpf, bpftool) y sus propios problemas de compilación en un entorno no probado por el equipo de Wazuh.
-
----
-
-## 3 CONCEPTOS PREVIOS
-
-Antes de seguir los pasos, vale la pena entender por qué hace falta cada cosa que se va a realizar y no solo copiar y pegar comandos. Esta sección explica los conceptos que aparecen una y otra vez en la guía.
-
-### ¿Qué es musl y por qué existe junto a glibc?
-Todo programa en C necesita una librería estándar de C (libc): es la capa que traduce funciones básicas como abrir un archivo, pedir memoria o formatear un texto en llamadas reales al sistema operativo. Ningún programa en C corre sin una.
-
-* **glibc (GNU C Library):** es la libc que usan la gran mayoría de distribuciones Linux "grandes": Ubuntu, Debian, CentOS y Fedora. Es la más completa, pero también la más pesada.
-* **musl:** es una libc alternativa, escrita para ser pequeña, simple y rápida. Alpine Linux la eligió como su libc por defecto precisamente por eso; es una de las razones por las que las imágenes de Alpine pesan tan poco comparadas con otras distribuciones.
-
-### ¿Qué es make y por qué compilamos con él?
-`make` es una herramienta que automatiza la compilación de proyectos grandes con muchos archivos fuente. En vez de compilar archivo por archivo a mano, un archivo llamado Makefile describe las reglas ("para construir X, primero hay que tener Y y Z, y correr este comando") y `make` se encarga de ejecutar todo en el orden correcto.
-
-Wazuh usa un Makefile gigante que compila cientos de archivos fuente propios más docenas de librerías de terceros (`src/external`). Por ejemplo:
-
-```bash
-make TARGET=agent CFLAGS="..."
-```
-
 
 ---
 
