@@ -2,6 +2,8 @@
 
 Guía técnica en LaTeX para compilar, instalar y registrar el agente de Wazuh 4.12.0 desde código fuente en Alpine Linux 3.21.5 (no soportado oficialmente por Wazuh, ya que usa `musl` en vez de `glibc`).
 
+Este material fue elaborado para el curso de ciberseguridad de la Universidad de los Andes y es contenido original desarrollado por mí.
+
 ## Contenido
 
 - `Debian_installation.md` — Pasos de instalación para sistemas Linux con distribución glibc.
